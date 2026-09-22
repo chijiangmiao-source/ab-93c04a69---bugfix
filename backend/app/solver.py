@@ -166,23 +166,35 @@ def _edge_directional_extrema(
 
         high = outer_high
         low = outer_low
+        # Runner-up extrema over every source (outer side plus each child
+        # branch).  Excluding one child's subtree must fall back to the best
+        # of the *remaining* sources — siblings included — not just to the
+        # outer side, so the best/second-best pair is tracked explicitly.
+        high_second: Optional[int] = None
+        low_second: Optional[int] = None
         high_branch: Optional[int] = None
         low_branch: Optional[int] = None
         for child, length, _edge_k in children[node]:
             if down_max[child] is not None:
                 value = down_max[child] - length
                 if high is None or value > high:
+                    high_second = high
                     high = value
                     high_branch = child
+                elif high_second is None or value > high_second:
+                    high_second = value
             if down_min[child] is not None:
                 value = down_min[child] - length
                 if low is None or value < low:
+                    low_second = low
                     low = value
                     low_branch = child
+                elif low_second is None or value < low_second:
+                    low_second = value
 
         for child, length, edge_k in children[node]:
-            parent_high = high if high_branch != child else outer_high
-            parent_low = low if low_branch != child else outer_low
+            parent_high = high if high_branch != child else high_second
+            parent_low = low if low_branch != child else low_second
             child_high = None if down_max[child] is None else down_max[child] - length
             child_low = None if down_min[child] is None else down_min[child] - length
             sides[edge_k] = (parent_high, parent_low, child_high, child_low)
@@ -322,14 +334,21 @@ def solve(
     best_half = best / 2
 
     # Canonical solution: earliest edge in input order attaining g*, smallest
-    # coordinate measured from the user-supplied head endpoint.
+    # coordinate measured from the user-supplied head endpoint.  When the
+    # user head is the rooted child, user coordinates run opposite to the
+    # internal ones, so the smallest user coordinate comes from the interval's
+    # internal *right* end.
     canonical_edge = next(k for k, (g_star, _iv) in enumerate(per_edge) if g_star == best)
     u, v, length = edges[canonical_edge]
     child = v if parent_edge[v] == canonical_edge else u
     head = u if child == v else v
-    internal_lo = per_edge[canonical_edge][1][0][0]
-    x_canon_internal = internal_lo
-    x_canon = x_canon_internal if head == u else Fraction(length) - x_canon_internal
+    internal_lo, internal_hi = per_edge[canonical_edge][1][0][:2]
+    if head == u:
+        x_canon_internal = internal_lo
+        x_canon = internal_lo
+    else:
+        x_canon_internal = internal_hi
+        x_canon = Fraction(length) - internal_hi
 
     # Residuals at the canonical point (computed in internal orientation).
     a_node, b_node = head, child
