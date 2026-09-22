@@ -164,25 +164,38 @@ def _edge_directional_extrema(
             outer_high = value if outer_high is None or value > outer_high else outer_high
             outer_low = value if outer_low is None or value < outer_low else outer_low
 
+        # Parent-side candidates are ``outer_*`` plus one candidate per child
+        # subtree.  Each child needs the extremum over all candidates *except*
+        # its own, so keep the best and the runner-up (best from a different
+        # branch).  Falling back to ``outer_*`` alone would silently drop
+        # sibling subtrees whenever the child's own branch holds the extremum.
         high = outer_high
         low = outer_low
         high_branch: Optional[int] = None
         low_branch: Optional[int] = None
+        high_runner: Optional[int] = None
+        low_runner: Optional[int] = None
         for child, length, _edge_k in children[node]:
             if down_max[child] is not None:
                 value = down_max[child] - length
                 if high is None or value > high:
+                    high_runner = high
                     high = value
                     high_branch = child
+                elif high_runner is None or value > high_runner:
+                    high_runner = value
             if down_min[child] is not None:
                 value = down_min[child] - length
                 if low is None or value < low:
+                    low_runner = low
                     low = value
                     low_branch = child
+                elif low_runner is None or value < low_runner:
+                    low_runner = value
 
         for child, length, edge_k in children[node]:
-            parent_high = high if high_branch != child else outer_high
-            parent_low = low if low_branch != child else outer_low
+            parent_high = high if high_branch != child else high_runner
+            parent_low = low if low_branch != child else low_runner
             child_high = None if down_max[child] is None else down_max[child] - length
             child_low = None if down_min[child] is None else down_min[child] - length
             sides[edge_k] = (parent_high, parent_low, child_high, child_low)
@@ -327,8 +340,12 @@ def solve(
     u, v, length = edges[canonical_edge]
     child = v if parent_edge[v] == canonical_edge else u
     head = u if child == v else v
-    internal_lo = per_edge[canonical_edge][1][0][0]
-    x_canon_internal = internal_lo
+    internal_lo, internal_hi, _pieces = per_edge[canonical_edge][1][0]
+    # Internal coordinates grow from the rooted-parent endpoint; when that is
+    # the user's *second* endpoint the mapping x_user = L - x_internal flips
+    # the order, so the smallest user coordinate comes from the interval's
+    # far (hi) end rather than its lo end.
+    x_canon_internal = internal_lo if head == u else internal_hi
     x_canon = x_canon_internal if head == u else Fraction(length) - x_canon_internal
 
     # Residuals at the canonical point (computed in internal orientation).

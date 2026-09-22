@@ -153,6 +153,99 @@ def main() -> int:
     record("闭区间同优：无传感器支管 [0,10] 整段最优且给出 t0(x)", interval_ok,
            f"{interval['coordinate_start']['text']}..{interval['coordinate_end']['text']}")
 
+    # --- Case 3b: audit scenario — sibling-subtree extrema must not be dropped ---
+    # Nodes 1,2,3; pipes 1->2 (len 4) then 1->3 (len 2); sensors on nodes
+    # 1,2,3 all reporting t=0.  Correct answer: r* = 1, the co-optimal set is
+    # exactly the closed interval x in [1, 2] on pipe #0 (pipe #1 excluded),
+    # canonical (x=1, t0=-2) with distances 1/3/3 and residuals +1/-1/-1.
+    audit = {
+        "nodes": [1, 2, 3],
+        "edges": [
+            {"u": 1, "v": 2, "length": 4},
+            {"u": 1, "v": 3, "length": 2},
+        ],
+        "sensors": [
+            {"node": 1, "time": 0},
+            {"node": 2, "time": 0},
+            {"node": 3, "time": 0},
+        ],
+    }
+    status, body = request("POST", f"{API_BASE}/api/localize", audit)
+    r = json.loads(body).get("result", {})
+    g = frac(r["optimal_value"])
+    canon = r["canonical"]
+    record("审计场景：最优最大绝对残差恰好为 1", status == 200 and g == 1,
+           f"r*={r['optimal_value']['text']}")
+    opt = r["optima"]
+    interval_3b = (
+        len(opt) == 1
+        and opt[0]["edge_index"] == 0
+        and not opt[0]["point"]
+        and frac(opt[0]["coordinate_start"]) == 1
+        and frac(opt[0]["coordinate_end"]) == 2
+    )
+    record("审计场景：同优集合恰为管段 #0 的闭区间 [1,2]（管段 #1 不入选）", interval_3b,
+           "; ".join(f"#{o['edge_index']} [{o['coordinate_start']['text']},{o['coordinate_end']['text']}]" for o in opt))
+    canon_3b = (
+        canon["edge_index"] == 0
+        and frac(canon["coordinate"]) == 1
+        and frac(canon["emission_time"]) == -2
+    )
+    record("审计场景：规范解为管段 #0 上 x=1、发声时刻 t0=-2", canon_3b,
+           f"x={canon['coordinate']['text']} t0={canon['emission_time']['text']}")
+    rows = r["residuals"]
+    table_3b = (
+        [frac(row["distance"]) for row in rows] == [Fraction(1), Fraction(3), Fraction(3)]
+        and [frac(row["predicted"]) for row in rows] == [Fraction(-1), Fraction(1), Fraction(1)]
+        and [frac(row["residual"]) for row in rows] == [Fraction(1), Fraction(-1), Fraction(-1)]
+    )
+    record("审计场景：距离 1/3/3、预测时刻 -1/1/1、残差 +1/-1/-1", table_3b,
+           "残差=" + ",".join(row["residual"]["text"] for row in rows))
+    # Independent recomputation purely from the response payload.
+    t0 = frac(canon["emission_time"])
+    consistent = True
+    recomputed_max = Fraction(0)
+    for row in rows:
+        d, p, res = frac(row["distance"]), frac(row["predicted"]), frac(row["residual"])
+        consistent = consistent and p == t0 + d and res == Fraction(row["observed"]) - p
+        recomputed_max = max(recomputed_max, abs(res))
+    record("审计场景：由响应的距离/预测/残差独立复算 max(|残差|) == r*",
+           consistent and recomputed_max == g, f"复算值={recomputed_max}")
+    wit = r["witnesses"]
+    record("审计场景：正极值证据为传感器 0，负极值证据为传感器 1、2",
+           wit["positive"] == [0] and wit["negative"] == [1, 2],
+           f"+:{wit['positive']} -:{wit['negative']}")
+
+    # Same draft with the last two sensor rows swapped: the geometry must be
+    # identical and the evidence must follow the nodes, not the row slots.
+    audit_swapped = {
+        **audit,
+        "sensors": [
+            {"node": 1, "time": 0},
+            {"node": 3, "time": 0},
+            {"node": 2, "time": 0},
+        ],
+    }
+    status2, body2 = request("POST", f"{API_BASE}/api/localize", audit_swapped)
+    r2 = json.loads(body2).get("result", {})
+    same_geometry = (
+        status2 == 200
+        and r2.get("optimal_value") == r["optimal_value"]
+        and r2.get("optima") == r["optima"]
+        and r2.get("canonical") == r["canonical"]
+    )
+    record("交换后两行传感器：几何解（r*、同优集合、规范解）保持不变", same_geometry)
+    by_node = {row["node"]: frac(row["residual"]) for row in r2["residuals"]}
+    node_of = {row["sensor_index"]: row["node"] for row in r2["residuals"]}
+    wit2 = r2["witnesses"]
+    mapping_3b = (
+        by_node == {1: Fraction(1), 2: Fraction(-1), 3: Fraction(-1)}
+        and {node_of[i] for i in wit2["positive"]} == {1}
+        and {node_of[i] for i in wit2["negative"]} == {2, 3}
+    )
+    record("交换后两行传感器：残差与正负证据仍按对应节点正确映射", mapping_3b,
+           f"+:{wit2['positive']} -:{wit2['negative']}")
+
     # --- Case 4: validation errors keep draft semantics and locate fields ---
     case4 = {
         "nodes": [1, 2, 3],
